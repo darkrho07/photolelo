@@ -20,11 +20,15 @@ npm run build
 npm start
 ```
 
+### Deploy on Vercel
+`vercel.json` is preconfigured with `outputDirectory: "dist"` and `buildCommand: "npm run build:client"`. When hosted statically on Vercel (where no persistent WebSocket server is running), Photo Lelo automatically switches Duo/Squad rooms to peer-to-peer WebRTC (`peerjs`) + `BroadcastChannel` so rooms continue working seamlessly across devices and tabs.
+
 ### Scripts
 - `npm run dev` — Runs the API + WebSocket server (`127.0.0.1:3001`) and Vite dev server (`0.0.0.0:5173`) concurrently with `/api` and `/ws` proxied seamlessly.
 - `npm run typecheck` — Typechecks both client and server TypeScript projects.
 - `npm test` — Runs unit and WebSocket room integration tests via Vitest.
 - `npm run build` — Builds the client (`dist/`) and compiles the server (`dist-server/`).
+- `npm run build:client` — Builds only the static Vite frontend (`dist/`, used by Vercel).
 
 ## Features Included
 - **Duo (2-Person), Squad (Up to 4), and Solo Modes**: Create a 5-letter room code + invite link or jump directly into a Solo booth.

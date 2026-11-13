@@ -8,7 +8,9 @@ import { LandingHero } from './components/LandingHero';
 import { ScenePrep } from './components/ScenePrep';
 import { POSE_DECK } from './data/boothData';
 import { useCamera } from './hooks/useCamera';
+import { useP2PRoom } from './hooks/useP2PRoom';
 import { useRoomSocket } from './hooks/useRoomSocket';
+import { generateClientRoomCode } from './lib/clientRoomEngine';
 import { playReadyChime } from './lib/sound';
 import { getLayoutMeta } from './lib/stripRenderer';
 import {
@@ -75,11 +77,36 @@ function pickSoloPoses(boothStyle: RoomConfig['boothStyle']): string[] {
   return res;
 }
 
+async function probeBackendServer(): Promise<{ available: boolean; totalStrips?: number }> {
+  try {
+    const res = await fetch('/api/health');
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok || !ct.includes('application/json')) {
+      return { available: false };
+    }
+    const data = await res.json();
+    if (data && data.ok === true && data.service === 'photo-lelo') {
+      return {
+        available: true,
+        totalStrips: typeof data.totalStripsCreated === 'number' ? data.totalStripsCreated : undefined,
+      };
+    }
+    return { available: false };
+  } catch {
+    return { available: false };
+  }
+}
+
 export function App() {
   const selfId = useMemo(() => getOrCreateParticipantId(), []);
   const [mode, setMode] = useState<SessionMode>('solo');
   const [step, setStep] = useState<WorkflowStep>('landing');
   const [roomCode, setRoomCode] = useState<string | null>(null);
+  const [roomTransport, setRoomTransport] = useState<'server' | 'p2p'>('server');
+  const [isP2PHost, setIsP2PHost] = useState(false);
+  const [p2pRoomMode, setP2PRoomMode] = useState<'duo' | 'squad'>('duo');
+  const [backendAvailable, setBackendAvailable] = useState<boolean | null>(null);
+
   const [selfName, setSelfName] = useState('You');
   const [totalStripsCreated, setTotalStripsCreated] = useState(1428);
   const [landingError, setLandingError] = useState<string | null>(null);
@@ -109,27 +136,31 @@ export function App() {
     defaultPresetIndex: selfId.charCodeAt(selfId.length - 1) % 4,
   });
 
-  // Fetch initial landing stats + check ?room= query param
-  useEffect(() => {
-    fetch('/api/stats')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data && typeof data.totalStripsCreated === 'number') {
-          setTotalStripsCreated(data.totalStripsCreated);
-        }
-      })
-      .catch(() => {});
+  const activeTransportRef = useRef<'server' | 'p2p'>('server');
+  activeTransportRef.current = roomTransport;
 
-    const params = new URLSearchParams(window.location.search);
-    const codeParam = params.get('room');
-    if (codeParam) {
-      const clean = codeParam.trim().toUpperCase();
-      setInitialUrlCode(clean);
-      handleJoinRoom(clean, 'Partner');
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const snapHandlerRef = useRef<(shotIndex: number) => void>(() => {});
 
-  const handleSnapFromServer = useCallback(
+  const wsSocket = useRoomSocket({
+    roomCode: roomTransport === 'server' && mode !== 'solo' ? roomCode : null,
+    participantId: selfId,
+    participantName: selfName,
+    onSnapTrigger: (shotIndex) => snapHandlerRef.current(shotIndex),
+  });
+
+  const p2pSocket = useP2PRoom({
+    active: roomTransport === 'p2p' && mode !== 'solo' && Boolean(roomCode),
+    roomCode,
+    isHost: isP2PHost,
+    roomMode: p2pRoomMode,
+    participantId: selfId,
+    participantName: selfName,
+    onSnapTrigger: (shotIndex) => snapHandlerRef.current(shotIndex),
+  });
+
+  const socket = roomTransport === 'p2p' ? p2pSocket : wsSocket;
+
+  snapHandlerRef.current = useCallback(
     (shotIndex: number) => {
       setFlashKey((k) => k + 1);
       const dataUrl = camera.captureFrameDataUrl({
@@ -140,18 +171,75 @@ export function App() {
         faceProp,
       });
       if (dataUrl) {
-        socket.sendShotFrame(shotIndex, dataUrl);
+        if (activeTransportRef.current === 'p2p') {
+          p2pSocket.sendShotFrame(shotIndex, dataUrl);
+        } else {
+          wsSocket.sendShotFrame(shotIndex, dataUrl);
+        }
       }
     },
-    [camera, faceFilter, faceProp] // eslint-disable-line react-hooks/exhaustive-deps
+    [camera, faceFilter, faceProp, p2pSocket, wsSocket]
   );
 
-  const socket = useRoomSocket({
-    roomCode,
-    participantId: selfId,
-    participantName: selfName,
-    onSnapTrigger: handleSnapFromServer,
-  });
+  const joinRoomWithProbe = async (code: string, name: string, hasServer: boolean) => {
+    setLandingError(null);
+    const cleanCode = code.trim().toUpperCase();
+    const cleanName = name.trim() || 'Partner';
+    setSelfName(cleanName);
+
+    if (hasServer) {
+      try {
+        const res = await fetch(`/api/rooms/${encodeURIComponent(cleanCode)}`);
+        if (!res.ok) {
+          setLandingError(`Room "${cleanCode}" was not found.`);
+          return;
+        }
+        const info = await res.json();
+        setRoomTransport('server');
+        setMode(info.mode === 'squad' ? 'squad' : 'duo');
+        setRoomCode(info.code);
+        setStep(info.phase || 'setup');
+        window.history.replaceState(null, '', `/?room=${info.code}`);
+        return;
+      } catch {
+        // Fall through to P2P if server request failed
+      }
+    }
+
+    // Static / Vercel P2P WebRTC + BroadcastChannel room join
+    setRoomTransport('p2p');
+    setIsP2PHost(false);
+    setP2PRoomMode('duo');
+    setMode('duo');
+    setRoomCode(cleanCode);
+    setStep('setup');
+    window.history.replaceState(null, '', `/?room=${cleanCode}`);
+  };
+
+  // Detect backend availability & check ?room= query param on mount
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const probe = await probeBackendServer();
+      if (!mounted) return;
+      setBackendAvailable(probe.available);
+      if (probe.totalStrips !== undefined) {
+        setTotalStripsCreated(probe.totalStrips);
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      const codeParam = params.get('room');
+      if (codeParam) {
+        const clean = codeParam.trim().toUpperCase();
+        setInitialUrlCode(clean);
+        await joinRoomWithProbe(clean, 'Partner', probe.available);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync step with room phase when in multiplayer room
   useEffect(() => {
@@ -204,42 +292,49 @@ export function App() {
     setLandingError(null);
     const cleanName = name.trim() || 'Player 1';
     setSelfName(cleanName);
-    try {
-      const res = await fetch('/api/rooms', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: roomMode, name: cleanName }),
-      });
-      if (!res.ok) throw new Error('Could not create room');
-      const data = await res.json();
-      setMode(roomMode);
-      setRoomCode(data.code);
-      setStep('setup');
-      window.history.replaceState(null, '', `/?room=${data.code}`);
-    } catch {
-      setLandingError('Unable to reach Photo Lelo server. Please make sure the server is running.');
+
+    const hasServer =
+      backendAvailable !== null ? backendAvailable : (await probeBackendServer()).available;
+    setBackendAvailable(hasServer);
+
+    if (hasServer) {
+      try {
+        const res = await fetch('/api/rooms', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: roomMode, name: cleanName }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
+          const data = await res.json();
+          setRoomTransport('server');
+          setMode(roomMode);
+          setRoomCode(data.code);
+          setStep('setup');
+          window.history.replaceState(null, '', `/?room=${data.code}`);
+          return;
+        }
+      } catch {
+        // Fallback to P2P room host on static deployments
+      }
     }
+
+    // Static / Vercel P2P Room Host
+    const code = generateClientRoomCode();
+    setRoomTransport('p2p');
+    setIsP2PHost(true);
+    setP2PRoomMode(roomMode);
+    setMode(roomMode);
+    setRoomCode(code);
+    setStep('setup');
+    window.history.replaceState(null, '', `/?room=${code}`);
   };
 
   const handleJoinRoom = async (code: string, name: string) => {
-    setLandingError(null);
-    const cleanCode = code.trim().toUpperCase();
-    const cleanName = name.trim() || 'Partner';
-    setSelfName(cleanName);
-    try {
-      const res = await fetch(`/api/rooms/${encodeURIComponent(cleanCode)}`);
-      if (!res.ok) {
-        setLandingError(`Room "${cleanCode}" was not found.`);
-        return;
-      }
-      const info = await res.json();
-      setMode(info.mode === 'squad' ? 'squad' : 'duo');
-      setRoomCode(info.code);
-      setStep(info.phase || 'setup');
-      window.history.replaceState(null, '', `/?room=${info.code}`);
-    } catch {
-      setLandingError('Could not connect to room server.');
-    }
+    const hasServer =
+      backendAvailable !== null ? backendAvailable : (await probeBackendServer()).available;
+    setBackendAvailable(hasServer);
+    await joinRoomWithProbe(code, name, hasServer);
   };
 
   const handleStartSolo = (name: string) => {
@@ -257,6 +352,7 @@ export function App() {
   const handleGoHome = () => {
     if (soloTimerRef.current) clearTimeout(soloTimerRef.current);
     setRoomCode(null);
+    setIsP2PHost(false);
     setMode('solo');
     setStep('landing');
     window.history.replaceState(null, '', '/');
