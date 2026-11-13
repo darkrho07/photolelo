@@ -1,0 +1,125 @@
+@import "@fontsource/fraunces/600.css";
+@import "@fontsource/fraunces/700.css";
+@import "@fontsource/plus-jakarta-sans/400.css";
+@import "@fontsource/plus-jakarta-sans/500.css";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+@import "@fontsource/plus-jakarta-sans/800.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource/jetbrains-mono/700.css";
+@import "tailwindcss";
+
+:root {
+  --bg-paper: #FAF6EF;
+  --bg-card: #FFFFFF;
+  --ink: #18181B;
+  --ink-muted: #52525B;
+  --coral: #FF4D4D;
+  --marigold: #FFB800;
+  --cobalt: #2563EB;
+  --mint: #10B981;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-paper);
+  color: var(--ink);
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  background-image: radial-gradient(rgba(24, 24, 27, 0.06) 1px, transparent 1px);
+  background-size: 20px 20px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.font-display {
+  font-family: "Fraunces", Georgia, serif;
+}
+
+.font-mono-code {
+  font-family: "JetBrains Mono", monospace;
+}
+
+.tactile-card {
+  background: var(--bg-card);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0px var(--ink);
+}
+
+.tactile-card-sm {
+  background: var(--bg-card);
+  border: 2px solid var(--ink);
+  box-shadow: 2.5px 2.5px 0px var(--ink);
+}
+
+.tactile-btn {
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0px var(--ink);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background-color 0.15s ease;
+}
+
+.tactile-btn:hover:not(:disabled) {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px var(--ink);
+}
+
+.tactile-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0px var(--ink);
+}
+
+@keyframes stripEject {
+  0% {
+    opacity: 0;
+    transform: translateY(-70px) scale(0.95);
+  }
+  65% {
+    opacity: 1;
+    transform: translateY(6px) scale(1);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-strip-eject {
+  animation: stripEject 0.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes shutterFlash {
+  0% {
+    opacity: 0.96;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.animate-shutter-flash {
+  animation: shutterFlash 0.55s ease-out forwards;
+}
+
+@keyframes curtainLeft {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes curtainRight {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-curtain-left {
+  animation: curtainLeft 1.05s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+
+.animate-curtain-right {
+  animation: curtainRight 1.05s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
